@@ -1,0 +1,172 @@
+begin;
+
+-- lvl tbl for qna + ans
+create table if not exists public.levels (
+  id bigserial primary key,
+  level_number int not null unique,
+  title text,
+  question_text text,
+  question_image_url text,
+  answer_key text not null,
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_levels_level_number on public.levels(level_number);
+
+-- prof tbl for players
+create table if not exists public.profiles (
+  id uuid primary key references auth.users on delete cascade,
+  display_name text,
+  current_level int not null default 1,
+  updated_at timestamptz not null default now()
+);
+
+-- ts fn for upd
+create or replace function public.touch_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+-- lvl trig for ts
+drop trigger if exists trg_levels_touch on public.levels;
+create trigger trg_levels_touch
+before update on public.levels
+for each row
+execute function public.touch_updated_at();
+
+-- prof trig for ts
+drop trigger if exists trg_profiles_touch on public.profiles;
+create trigger trg_profiles_touch
+before update on public.profiles
+for each row
+execute function public.touch_updated_at();
+
+-- new user trig to seed prof
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_display text;
+begin
+  v_display := coalesce(new.raw_user_meta_data->>'full_name', new.raw_user_meta_data->>'name', new.email);
+  insert into public.profiles (id, display_name, current_level)
+  values (new.id, v_display, 1)
+  on conflict (id) do update
+    set display_name = excluded.display_name;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_handle_new_user on auth.users;
+create trigger trg_handle_new_user
+after insert on auth.users
+for each row execute function public.handle_new_user();
+
+-- rls cfg start
+alter table public.levels enable row level security;
+alter table public.profiles enable row level security;
+
+do $$
+begin
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'levels' and policyname = 'levels_select_all_auth') then
+    create policy "levels_select_all_auth"
+    on public.levels
+    for select
+    to authenticated, anon
+    using (true);
+  end if;
+end;
+$$;
+
+do $$
+begin
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'profiles' and policyname = 'profiles_select_all_auth') then
+    create policy "profiles_select_all_auth"
+    on public.profiles
+    for select
+    to authenticated
+    using (true);
+  end if;
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'profiles' and policyname = 'profiles_self_update') then
+    create policy "profiles_self_update"
+    on public.profiles
+    for update
+    to authenticated
+    using (auth.uid() = id)
+    with check (auth.uid() = id);
+  end if;
+end;
+$$;
+
+revoke all on public.levels from anon, authenticated;
+grant select (id, level_number, title, question_text, question_image_url, updated_at) on public.levels to anon, authenticated;
+
+revoke all on public.profiles from anon, authenticated;
+grant select (id, display_name, current_level, updated_at) on public.profiles to authenticated;
+grant update (display_name, current_level) on public.profiles to authenticated;
+
+-- rpc fn for ans
+create or replace function public.verify_answer(
+  p_level_number int,
+  p_attempt text
+)
+returns table (
+  is_correct boolean,
+  next_level int
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  target_level public.levels%rowtype;
+  v_next int;
+begin
+  select *
+  into target_level
+  from public.levels
+  where level_number = p_level_number;
+
+  if not found then
+    return query select false, null::int;
+  end if;
+
+  if trim(lower(target_level.answer_key)) = trim(lower(coalesce(p_attempt, ''))) then
+    update public.profiles
+    set current_level = greatest(target_level.level_number + 1, current_level),
+        updated_at = now()
+    where id = auth.uid()
+    returning current_level into v_next;
+
+    return query select true, v_next;
+  end if;
+
+  return query select false, null::int;
+end;
+$$;
+
+grant execute on function public.verify_answer(int, text) to authenticated;
+
+-- sample lvl seed
+insert into public.levels (level_number, title, question_text, question_image_url, answer_key)
+values
+  (1, 'cipher kickoff', 'Decode the classic caesar shift: KHOOR GDJHQW', null, 'hello agent'),
+  (2, 'image trail', 'Look at the colors in the provided grid. each hue maps to a letter.', 'https://yourcdn.example.com/hunt/level-2.png', 'spectra'),
+  (3, 'numbers only', 'A1Z26 gives you the next password: 3-18-25-16-20-9-3', null, 'cryptic'),
+  (4, 'steganote', 'Letters hidden every 3rd word reveal the truth.', null, 'reveal')
+on conflict (level_number) do update
+set title = excluded.title,
+    question_text = excluded.question_text,
+    question_image_url = excluded.question_image_url,
+    answer_key = excluded.answer_key,
+    updated_at = now();
+
+commit;
