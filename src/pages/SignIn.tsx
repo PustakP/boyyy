@@ -44,8 +44,8 @@ export const SignInPage = () => {
       <div className="glow-overlay" />
       <div className="signin-card">
         <p className="signin-tag">gdg cryptic hunt :3</p>
-        <h1 className="signin-title">decrypt the enigma</h1>
-        <p className="signin-blurb">google-powered access to riddles, enigmas, and leaderboard glory.</p>
+        <h1 className="signin-title">buttocks pain excercises</h1>
+        <p className="signin-blurb">leaderboard #1 gets a free buttocks pain excercise session</p>
         <button type="button" className="signin-btn" disabled={busy} onClick={handleGoogleSignIn}>
           <span className="signin-btn__icon" aria-hidden="true">
             <svg width="22" height="22" viewBox="0 0 48 48" role="img">
