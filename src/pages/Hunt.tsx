@@ -105,7 +105,7 @@ export const HuntPage = () => {
   const statusLabel = useMemo(() => {
     switch (status) {
       case 'checking':
-        return 'checking encrypted trails...'
+        return 'checking...'
       case 'correct':
         return 'correct! new q unlocked.'
       case 'incorrect':
